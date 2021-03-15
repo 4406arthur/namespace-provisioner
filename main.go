@@ -5,8 +5,8 @@ import (
 	"flag"
 	"os"
 
-	"github.com/Daimler/namespace-provisioner/pkg/controllers"
-	"github.com/Daimler/namespace-provisioner/pkg/util"
+	"github.com/4406arthur/namespace-provisioner/pkg/controllers"
+	"github.com/4406arthur/namespace-provisioner/pkg/util"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"

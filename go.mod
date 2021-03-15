@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
-module github.com/Daimler/namespace-provisioner
+module github.com/4406arthur/namespace-provisioner
 
-go 1.14
+go 1.16
 
 require (
 	github.com/go-logr/logr v0.1.0

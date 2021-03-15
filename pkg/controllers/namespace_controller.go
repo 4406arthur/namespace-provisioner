@@ -5,6 +5,7 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/go-logr/logr"
@@ -25,9 +26,6 @@ type NamespaceReconciler struct {
 	Log                 logr.Logger
 	ConfigNamespaceName string
 }
-
-const namespaceConfigMapAnnotation = "namespace-provisioner.daimler-tss.com/config"
-const namespaceSecretAnnotation = "namespace-provisioner.daimler-tss.com/secret"
 
 func (r *NamespaceReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	_ = context.Background()
@@ -52,19 +50,11 @@ func (r *NamespaceReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	if namespaceInstance.Status.Phase == corev1.NamespaceActive {
 
 		var configs []string
-		if namespaceAnnotationVal, ok := namespaceInstance.ObjectMeta.Annotations[namespaceConfigMapAnnotation]; ok {
 
-			logger.Info(fmt.Sprintf("Handle event for namespace %s with annotation %s=%s", namespaceName, namespaceConfigMapAnnotation, namespaceAnnotationVal))
-			configs, err = r.addConfigFromConfigMap(configs, namespaceAnnotationVal, namespaceInstance)
-			if err != nil {
-				return ctrl.Result{}, err
-			}
-		}
+		if sharedSecrets, ok := os.LookupEnv("SHARE_SECRET"); ok {
 
-		if namespaceAnnotationVal, ok := namespaceInstance.ObjectMeta.Annotations[namespaceSecretAnnotation]; ok {
-
-			logger.Info(fmt.Sprintf("Handle event for namespace %s with annotation %s=%s", namespaceName, namespaceSecretAnnotation, namespaceAnnotationVal))
-			configs, err = r.addConfigFromSecret(configs, namespaceAnnotationVal, namespaceInstance)
+			logger.Info(fmt.Sprintf("Handle event for namespace %s with secrerts %s", namespaceName, sharedSecrets))
+			configs, err = r.addConfigFromSecret(configs, sharedSecrets, namespaceInstance)
 			if err != nil {
 				return ctrl.Result{}, err
 			}
@@ -88,27 +78,27 @@ func (r *NamespaceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-func (r *NamespaceReconciler) addConfigFromConfigMap(configs []string, configMapNames string, namespace *corev1.Namespace) ([]string, error) {
-	logger := r.Log.WithValues("namespace", namespace.Name)
-	// configMapNames could be comma separated
-	for _, configMapName := range strings.Split(configMapNames, ",") {
+// func (r *NamespaceReconciler) addConfigFromConfigMap(configs []string, configMapNames string, namespace *corev1.Namespace) ([]string, error) {
+// 	logger := r.Log.WithValues("namespace", namespace.Name)
+// 	// configMapNames could be comma separated
+// 	for _, configMapName := range strings.Split(configMapNames, ",") {
 
-		configMap := &corev1.ConfigMap{}
-		err := r.Client.Get(context.TODO(), types.NamespacedName{Name: configMapName, Namespace: r.ConfigNamespaceName}, configMap)
+// 		configMap := &corev1.ConfigMap{}
+// 		err := r.Client.Get(context.TODO(), types.NamespacedName{Name: configMapName, Namespace: r.ConfigNamespaceName}, configMap)
 
-		if err != nil {
-			logger.Error(err, fmt.Sprintf("Error getting ConfigMap %s in namespace %s: %s", configMapName, r.ConfigNamespaceName, err))
-			return configs, err
-		}
+// 		if err != nil {
+// 			logger.Error(err, fmt.Sprintf("Error getting ConfigMap %s in namespace %s: %s", configMapName, r.ConfigNamespaceName, err))
+// 			return configs, err
+// 		}
 
-		logger.V(1).Info(fmt.Sprintf("Found ConfigMap %s in namespace %s", configMapName, r.ConfigNamespaceName))
-		for key, value := range configMap.Data {
-			logger.V(1).Info(fmt.Sprintf("Add %s from ConfigMap %s in namespace %s", key, configMapName, r.ConfigNamespaceName))
-			configs = append(configs, value)
-		}
-	}
-	return configs, nil
-}
+// 		logger.V(1).Info(fmt.Sprintf("Found ConfigMap %s in namespace %s", configMapName, r.ConfigNamespaceName))
+// 		for key, value := range configMap.Data {
+// 			logger.V(1).Info(fmt.Sprintf("Add %s from ConfigMap %s in namespace %s", key, configMapName, r.ConfigNamespaceName))
+// 			configs = append(configs, value)
+// 		}
+// 	}
+// 	return configs, nil
+// }
 
 func (r *NamespaceReconciler) addConfigFromSecret(configs []string, secretNames string, namespace *corev1.Namespace) ([]string, error) {
 	logger := r.Log.WithValues("namespace", namespace.Name)
