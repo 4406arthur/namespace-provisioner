@@ -51,7 +51,16 @@ func (r *NamespaceReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 
 		var configs []string
 
-		if sharedSecrets, ok := os.LookupEnv("SHARE_SECRET"); ok {
+		if sharedConfigmaps, ok := os.LookupEnv("SHARE_CONFIGMAPS"); ok {
+
+			logger.Info(fmt.Sprintf("Handle event for namespace %s with configmaps %s", namespaceName, sharedConfigmaps))
+			configs, err = r.addConfigFromConfigMap(configs, sharedConfigmaps, namespaceInstance)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+
+		if sharedSecrets, ok := os.LookupEnv("SHARE_SECRETS"); ok {
 
 			logger.Info(fmt.Sprintf("Handle event for namespace %s with secrerts %s", namespaceName, sharedSecrets))
 			configs, err = r.addConfigFromSecret(configs, sharedSecrets, namespaceInstance)
@@ -60,7 +69,6 @@ func (r *NamespaceReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 			}
 
 		}
-
 		if len(configs) > 0 {
 			return r.newResourcesFromConfig(configs, namespaceInstance)
 		}
@@ -78,27 +86,27 @@ func (r *NamespaceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-// func (r *NamespaceReconciler) addConfigFromConfigMap(configs []string, configMapNames string, namespace *corev1.Namespace) ([]string, error) {
-// 	logger := r.Log.WithValues("namespace", namespace.Name)
-// 	// configMapNames could be comma separated
-// 	for _, configMapName := range strings.Split(configMapNames, ",") {
+func (r *NamespaceReconciler) addConfigFromConfigMap(configs []string, configMapNames string, namespace *corev1.Namespace) ([]string, error) {
+	logger := r.Log.WithValues("namespace", namespace.Name)
+	// configMapNames could be comma separated
+	for _, configMapName := range strings.Split(configMapNames, ",") {
 
-// 		configMap := &corev1.ConfigMap{}
-// 		err := r.Client.Get(context.TODO(), types.NamespacedName{Name: configMapName, Namespace: r.ConfigNamespaceName}, configMap)
+		configMap := &corev1.ConfigMap{}
+		err := r.Client.Get(context.TODO(), types.NamespacedName{Name: configMapName, Namespace: r.ConfigNamespaceName}, configMap)
 
-// 		if err != nil {
-// 			logger.Error(err, fmt.Sprintf("Error getting ConfigMap %s in namespace %s: %s", configMapName, r.ConfigNamespaceName, err))
-// 			return configs, err
-// 		}
+		if err != nil {
+			logger.Error(err, fmt.Sprintf("Error getting ConfigMap %s in namespace %s: %s", configMapName, r.ConfigNamespaceName, err))
+			return configs, err
+		}
 
-// 		logger.V(1).Info(fmt.Sprintf("Found ConfigMap %s in namespace %s", configMapName, r.ConfigNamespaceName))
-// 		for key, value := range configMap.Data {
-// 			logger.V(1).Info(fmt.Sprintf("Add %s from ConfigMap %s in namespace %s", key, configMapName, r.ConfigNamespaceName))
-// 			configs = append(configs, value)
-// 		}
-// 	}
-// 	return configs, nil
-// }
+		logger.V(1).Info(fmt.Sprintf("Found ConfigMap %s in namespace %s", configMapName, r.ConfigNamespaceName))
+		for key, value := range configMap.Data {
+			logger.V(1).Info(fmt.Sprintf("Add %s from ConfigMap %s in namespace %s", key, configMapName, r.ConfigNamespaceName))
+			configs = append(configs, value)
+		}
+	}
+	return configs, nil
+}
 
 func (r *NamespaceReconciler) addConfigFromSecret(configs []string, secretNames string, namespace *corev1.Namespace) ([]string, error) {
 	logger := r.Log.WithValues("namespace", namespace.Name)
@@ -125,43 +133,40 @@ func (r *NamespaceReconciler) addConfigFromSecret(configs []string, secretNames 
 
 func (r *NamespaceReconciler) newResourcesFromConfig(configs []string, namespace *corev1.Namespace) (ctrl.Result, error) {
 	logger := r.Log.WithValues("namespace", namespace.Name)
-	for _, config := range configs {
 
-		var resources = strings.Split(config, "---")
-		for _, resource := range resources {
+	for _, resource := range configs {
+		logger.Info(fmt.Sprintf("dump out resource yaml\n %s", resource))
+		obj, groupKindVersion, err := scheme.Codecs.UniversalDeserializer().Decode([]byte(resource), nil, nil)
 
-			obj, groupKindVersion, err := scheme.Codecs.UniversalDeserializer().Decode([]byte(resource), nil, nil)
+		if err != nil {
+			logger.Error(err, fmt.Sprintf("Error while decoding YAML object. Reason=%v", err))
+			return ctrl.Result{}, err
+		}
 
+		if k8sObj, ok := obj.(runtime.Object); ok {
+
+			accessor := meta.NewAccessor()
+			accessor.SetNamespace(k8sObj, namespace.Name)
+
+			name, err := accessor.Name(k8sObj)
 			if err != nil {
-				logger.Error(err, fmt.Sprintf("Error while decoding YAML object. Reason=%v", err))
+				logger.Error(err, fmt.Sprintf("Error getting name of object %v", k8sObj))
 				return ctrl.Result{}, err
 			}
 
-			if k8sObj, ok := obj.(runtime.Object); ok {
+			// Check if this object already exists
+			var found unstructured.Unstructured
+			found.SetGroupVersionKind(k8sObj.GetObjectKind().GroupVersionKind())
+			err = r.Client.Get(context.TODO(), types.NamespacedName{Name: name, Namespace: namespace.Name}, &found)
 
-				accessor := meta.NewAccessor()
-				accessor.SetNamespace(k8sObj, namespace.Name)
-
-				name, err := accessor.Name(k8sObj)
+			if err != nil && apiErrors.IsNotFound(err) {
+				logger.Info(fmt.Sprintf("Try to create object of kind %s with version %s on namespace %s", groupKindVersion.Kind, groupKindVersion, namespace.Namespace))
+				err = r.Client.Create(context.TODO(), k8sObj)
 				if err != nil {
-					logger.Error(err, fmt.Sprintf("Error getting name of object %v", k8sObj))
 					return ctrl.Result{}, err
 				}
-
-				// Check if this object already exists
-				var found unstructured.Unstructured
-				found.SetGroupVersionKind(k8sObj.GetObjectKind().GroupVersionKind())
-				err = r.Client.Get(context.TODO(), types.NamespacedName{Name: name, Namespace: namespace.Name}, &found)
-
-				if err != nil && apiErrors.IsNotFound(err) {
-					logger.Info(fmt.Sprintf("Try to create object of kind %s with version %s on namespace %s", groupKindVersion.Kind, groupKindVersion, namespace.Namespace))
-					err = r.Client.Create(context.TODO(), k8sObj)
-					if err != nil {
-						return ctrl.Result{}, err
-					}
-				} else {
-					logger.V(1).Info(fmt.Sprintf("Object %s already exists ", name))
-				}
+			} else {
+				logger.V(1).Info(fmt.Sprintf("Object %s already exists ", name))
 			}
 		}
 	}
